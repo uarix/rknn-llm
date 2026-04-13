@@ -1,0 +1,30 @@
+[Unit]
+Description=RKLLM OpenAI-Compatible Multimodal Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/rkllm-vl-openai
+WorkingDirectory=__WORKSHOP__
+ExecStart=/usr/bin/python3 __WORKSHOP__/flask_vl_openai_server.py \
+  --rkllm_model_path ${RKLLM_MODEL_PATH} \
+  --vision_model_path ${VISION_MODEL_PATH} \
+  --imgenc_path __WORKSHOP__/imgenc \
+  --target_platform ${TARGET_PLATFORM} \
+  --model_name ${MODEL_NAME} \
+  --port ${PORT} \
+  --rknn_core_num ${RKNN_CORE_NUM} \
+  --max_context_len ${MAX_CONTEXT_LEN} \
+  --max_new_tokens ${MAX_NEW_TOKENS} \
+  --img_start ${IMG_START} \
+  --img_end ${IMG_END} \
+  --img_content ${IMG_CONTENT} \
+  --fix_freq
+Environment=LD_LIBRARY_PATH=__WORKSHOP__/lib
+Restart=always
+RestartSec=2
+LimitNOFILE=102400
+
+[Install]
+WantedBy=multi-user.target

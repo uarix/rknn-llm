@@ -19,6 +19,7 @@
 #include <iostream>
 #include <fstream>
 #include <chrono>
+#include <vector>
 #include <opencv2/opencv.hpp>
 #include "image_enc.h"
 
@@ -52,17 +53,21 @@ int main(int argc, char** argv)
     if (argc < 4) {
         std::cerr << "Usage:\n"
                 << "  " << argv[0]
-                << " <model_path> <image_path> <core_num>\n\n"
+                << " <model_path> <image_path> <core_num> [output_embed_path] [output_meta_path]\n\n"
                 << "Arguments:\n"
                 << "  model_path       Path to the model file (e.g., ./internvl3-1b.rkllm)\n"
                 << "  image_path       Path to the input image (e.g., ./demo.jpg)\n"
-                << "  core_num         Number of NPU cores to use (e.g., 1/2/3)\n";
+                << "  core_num         Number of NPU cores to use (e.g., 1/2/3)\n"
+                << "  output_embed_path Optional output file for image embedding (default: ./img_vec.bin)\n"
+                << "  output_meta_path  Optional output file for metadata json\n";
         return -1;
     }
 
     const char * model_path = argv[1];
     const char * image_path = argv[2];
     const int core_num = atoi(argv[3]);
+    const char * output_embed_path = (argc >= 5) ? argv[4] : "./img_vec.bin";
+    const char * output_meta_path = (argc >= 6) ? argv[5] : nullptr;
 
     int ret;
     rknn_app_context_t rknn_app_ctx;
@@ -95,9 +100,10 @@ int main(int argc, char** argv)
 
     std::chrono::high_resolution_clock::time_point t_every_begin_us;
     std::chrono::high_resolution_clock::time_point t_every_end_us;
-    float img_vec[rknn_app_ctx.model_image_token * rknn_app_ctx.model_embed_size];
+    int rkllm_image_embed_len = rknn_app_ctx.model_image_token * rknn_app_ctx.model_embed_size * rknn_app_ctx.io_num.n_output;
+    std::vector<float> img_vec(rkllm_image_embed_len, 0.0f);
     t_every_begin_us = std::chrono::high_resolution_clock::now();
-    ret = run_imgenc(&rknn_app_ctx, resized_img.data, img_vec);
+    ret = run_imgenc(&rknn_app_ctx, resized_img.data, img_vec.data());
     if (ret != 0) {
         printf("run_imgenc fail! ret=%d\n", ret);
     }
@@ -105,10 +111,32 @@ int main(int argc, char** argv)
     auto encoder_time = std::chrono::duration_cast<std::chrono::microseconds>(t_every_end_us - t_every_begin_us);
     printf("%s: Encoder the image cost %8.2f ms\n", __func__, encoder_time.count() / 1000.0);
     
-    // Writes the array img_vec to the file
-    std::ofstream file("./img_vec.bin", std::ios::binary);
-    file.write(reinterpret_cast<char*>(img_vec), sizeof(img_vec));
+    // Writes the embedding to file.
+    std::ofstream file(output_embed_path, std::ios::binary);
+    if (!file) {
+        printf("open output file failed: %s\n", output_embed_path);
+        release_imgenc(&rknn_app_ctx);
+        return -1;
+    }
+    file.write(reinterpret_cast<const char*>(img_vec.data()), img_vec.size() * sizeof(float));
     file.close();
+
+    if (output_meta_path != nullptr) {
+        std::ofstream meta_file(output_meta_path, std::ios::out);
+        if (!meta_file) {
+            printf("open meta file failed: %s\n", output_meta_path);
+            release_imgenc(&rknn_app_ctx);
+            return -1;
+        }
+        int image_embed_length = rknn_app_ctx.model_embed_size * rknn_app_ctx.io_num.n_output;
+        meta_file << "{\n"
+                  << "  \"n_image_tokens\": " << rknn_app_ctx.model_image_token << ",\n"
+                  << "  \"image_width\": " << rknn_app_ctx.model_width << ",\n"
+                  << "  \"image_height\": " << rknn_app_ctx.model_height << ",\n"
+                  << "  \"image_embed_length\": " << image_embed_length << "\n"
+                  << "}\n";
+        meta_file.close();
+    }
 
     ret = release_imgenc(&rknn_app_ctx);
     if (ret != 0) {
